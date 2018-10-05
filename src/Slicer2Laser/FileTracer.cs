@@ -10,47 +10,87 @@ namespace Slicer2Laser
     public class FileTracer
     {
 
-        public IEnumerable<DxfLine> Trace(Stream data, double totalX, double totalY, double offsetX, double offsetY,
-            int passes)
+        public IEnumerable<DxfLine> Trace(Stream data, Settings settings)
         {
-            var lines = GetLines(data, passes).ToArray();
+            var dxf = DxfFile.Load(data);
+            var unitsConversion = GetConversionToMillimeters(dxf);
+            var lines = TraceDxf(dxf, settings, unitsConversion);
+            return lines.ToArray();
+        }
 
-            var points = lines.SelectMany(l => new[] {l.P1, l.P2}).Distinct().ToArray();
+        private IEnumerable<DxfLine> TraceDxf(DxfFile dxf, Settings settings, double unitsConversion)
+        {
+
+            var lines = GetLines(dxf, settings)
+                .Select(l => Move.Scale(l, unitsConversion))
+                .ToArray();
+
+            if (!lines.Any())
+                yield break;
+
+            var points = lines.SelectMany(l => new[] { l.P1, l.P2 }).Distinct().ToArray();
 
             var minX = points.Min(p => p.X);
             var minY = points.Min(p => p.Y);
             var maxX = points.Max(p => p.X);
             var maxY = points.Max(p => p.Y);
+            var totalX = maxX - minX;
+            var totalY = maxY - minY;
 
-            var drawnTotalX = maxX - minX;
-            var drawnTotalY = maxY - minY;
+            Console.WriteLine($"{totalX:F4}w x {totalY:F4}y");
 
-            var scaleX = totalX / drawnTotalX;
-            var scaleY = totalY / drawnTotalY;
+            var offsetAndTransformOriginX = -settings.OffsetX - minX;
+            var offsetAndTransformOriginY = -settings.OffsetY - minY;
 
-            var offsetAndTransformOriginX = -offsetX - minX;
-            var offsetAndTransformOriginY = -offsetY - minY;
+            var moveHeight = 0;
 
-            yield return Move.TransformAndScale(
-                Move.CreateMove(new DxfPoint(minX, minY, 0), lines[0].P1),
-                scaleX, 
-                scaleY, 
-                offsetAndTransformOriginX, 
-                offsetAndTransformOriginY
+            var aboveOrigin = new DxfPoint(0, 0, moveHeight);
+
+            yield return Move.CreateMove(aboveOrigin, aboveOrigin, moveHeight);
+
+            yield return Move.Transform(
+                Move.CreateMove(
+                    new DxfPoint(minX, minY, moveHeight),
+                    lines[0].P1, moveHeight),
+                offsetAndTransformOriginX,
+                offsetAndTransformOriginY,
+                moveHeight
             );
 
+            DxfLine lastLine = null;
             foreach (var line in lines)
             {
-                yield return Move.TransformAndScale(line, scaleX, scaleY, offsetAndTransformOriginX, offsetAndTransformOriginY);
+                lastLine = Move.Transform(line, offsetAndTransformOriginX, offsetAndTransformOriginY, line.P1.Z);
+                yield return lastLine;
             }
 
-            yield return Move.CreateMove(lines.Last().P2, new DxfPoint(offsetX, offsetY, 0));
+            yield return Move.CreateMove(lastLine.P2, lastLine.P2, moveHeight);
+            yield return Move.CreateMove(lastLine.P2, new DxfPoint(settings.OffsetX, settings.OffsetY, moveHeight), moveHeight);
         }
 
-        private static IEnumerable<DxfLine> GetLines(Stream data, int passes)
-        {
-            var dxf = DxfFile.Load(data);
 
+        private double GetConversionToMillimeters(DxfFile dxf)
+        {
+            switch (dxf.Header.DefaultDrawingUnits)
+            {
+                case DxfUnits.Meters:
+                    return 1000;
+                case DxfUnits.Unitless: // assume millimeters
+                    Console.WriteLine("Unit of measure not defined in DXF. Assuming drawing is in millimeters.");
+                    return 1.0;
+                case DxfUnits.Millimeters:
+                    return 1.0;
+                case DxfUnits.Feet:
+                    return 25.4 * 12.0;
+                case DxfUnits.Inches:
+                    return 25.4;
+                default:
+                    throw new NotSupportedException("DefaultDrawingUnits=" + dxf.Header.DefaultDrawingUnits);
+            }
+        }
+
+        private static IEnumerable<DxfLine> GetLines(DxfFile dxf, Settings settings)
+        {
             var lines = dxf.Entities
                 .OfType<DxfLine>()
                 .Where(l => !l.Layer.Equals("annotation", StringComparison.InvariantCultureIgnoreCase))
@@ -70,23 +110,29 @@ namespace Slicer2Laser
             var isFirstShape = true;
             foreach (var shape in shapes)
             {
-                var linesForShape = shapeTracer.Trace(shape).ToArray();
+                var linesForShape = shapeTracer.Trace(settings, shape).ToArray();
 
                 if (!linesForShape.Any()) continue;
 
-                for (var pass = 0; pass < passes; pass++)
+                var currentHeight = 0.0;
+                var stepDownPerPass = settings.Depth / (double) settings.Passes;
+
+                for (var pass = 0; pass < settings.Passes; pass++)
                 {
-                    if (!isFirstShape)
-                        yield return Move.CreateMove(current, linesForShape[0].P1); // Move between shapes
+                    if (!isFirstShape || pass != 0)
+                    {
+                        yield return Move.CreateMove(current, linesForShape[0].P1, currentHeight); // Move between shapes
+                    }
 
                     current = linesForShape[0].P1;
 
                     foreach (var line in linesForShape)
                     {
-                        yield return line;
+                        yield return line.AtHeight(currentHeight);
                         current = line.P2;
                     }
 
+                    currentHeight -= stepDownPerPass;
                     isFirstShape = false;
                 }
             }

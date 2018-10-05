@@ -17,7 +17,7 @@ namespace Slicer2Laser
             _linesByPoint = linesByPoint;
         }
 
-        public IEnumerable<DxfLine> Trace(ISet<DxfPoint> shape)
+        public IEnumerable<DxfLine> Trace(Settings settings, ISet<DxfPoint> shape)
         {
             var shapePathStarts = shape.Where(p => _pathStarts.ContainsKey(p)).ToArray();
             var undrawnLinesInShape = shape.SelectMany(point => _linesByPoint[point]).ToHashSet();
@@ -34,7 +34,7 @@ namespace Slicer2Laser
                         ? lineToDraw.P2
                         : lineToDraw.P1; // Move to the other end of the line
 
-                    yield return Move.CreateLine(currentLocation, nextLocation);
+                    yield return Move.CreateLine(currentLocation, nextLocation, 0);
                     currentLocation = nextLocation;
                 }
 
@@ -66,7 +66,7 @@ namespace Slicer2Laser
                 if (!nextClosestStart.HasValue)
                     yield break; // All done with this shape
 
-                yield return Move.CreateMove(currentLocation, nextClosestStart.Value);
+                yield return Move.CreateMove(currentLocation, nextClosestStart.Value, 0);
 
                 currentLocation = nextClosestStart.Value;
             }

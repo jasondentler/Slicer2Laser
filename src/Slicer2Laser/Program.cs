@@ -14,23 +14,30 @@ namespace Slicer2Laser
     {
         static void Main(string[] args)
         {
-            using (var stream = File.OpenRead(@"C:\Users\Jason\Documents\ToCut\DnD\Ankylosaurus\Ankylosaurus Head dxf.zip"))
+            var settings = new Settings()
+            {
+                DrawSpeed = 75,
+                MoveSpeed = 1000,
+                OffsetX = 0,
+                OffsetY = 0,
+                Passes = 1,
+                Depth = 4,
+                LaserPowerPercent = 100
+            };
+
+            using (var stream = File.OpenRead(@"C:\Users\Jason\Documents\ToCut\DnD\Ankylosaurus\Ankylosaurus Mount dxf.zip"))
             {
                 ZipOfDxfToGCode(
                     stream,
-                    @"C:\Users\Jason\Documents\ToCut\DnD\Ankylosaurus\Ankylosaurus Head dxf",
-                    25.4 * 10,
-                    25.4 * 10,
-                    0,
-                    0,
-                    2);
+                    @"C:\Users\Jason\Documents\ToCut\DnD\Ankylosaurus\Ankylosaurus Mount dxf",
+                    settings);
             }
 
             Console.WriteLine("Done");
             Console.ReadKey();
         }
 
-        private static void ZipOfDxfToGCode(Stream stream, string outputFolder, double totalX, double totalY, double offsetX, double offsetY, int passes)
+        private static void ZipOfDxfToGCode(Stream stream, string outputFolder, Settings settings)
         {
 
             if (!Directory.Exists(outputFolder))
@@ -47,12 +54,12 @@ namespace Slicer2Laser
                 var path = Path.Combine(outputFolder, Path.GetFileName(metadata.Name));
                 path = Path.ChangeExtension(path, "gcode");
 
-                var lines = new FileTracer().Trace(data, totalX, totalY, offsetX, offsetY, passes).ToArray();
+                var lines = new FileTracer().Trace(data, settings).ToArray();
 
                 using (var output = new StreamWriter(path, false))
                 {
                     WriteGCodeHeader(metadata, output);
-                    WriteGCodeMoves(output, lines);
+                    WriteGCodeMoves(settings, output, lines);
                     WriteGCodeFooter(metadata, output);
                     output.Close();
                 }
@@ -73,11 +80,12 @@ namespace Slicer2Laser
             output.WriteLine("G92 X0 Y0 Z0 ; Set origin");
         }
 
-        private static void WriteGCodeMoves(TextWriter output, IEnumerable<DxfLine> lines)
+        private static void WriteGCodeMoves(Settings settings, TextWriter output, IEnumerable<DxfLine> lines)
         {
-            const int moveSpeed = 2000;
-            const int cutSpeed = 200;
-            const int laserOnValue = 255;
+            var moveSpeed = settings.MoveSpeed;
+            var cutSpeed = settings.DrawSpeed;
+            const int laserMaxValue = 255;
+            var laserOnValue = (int) (laserMaxValue * (settings.LaserPowerPercent / 100.0));
 
             var laserOnScript = string.Join(Environment.NewLine, new[]
             {
@@ -108,6 +116,8 @@ namespace Slicer2Laser
                 output.Write(line.P2.X.ToString("F4"));
                 output.Write(" Y");
                 output.Write(line.P2.Y.ToString("F4"));
+                output.Write(" Z");
+                output.Write(line.P2.Z.ToString("F4"));
                 output.Write(" F");
                 output.WriteLine(isMove ? moveSpeed : cutSpeed);
 
